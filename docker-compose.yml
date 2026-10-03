@@ -1,0 +1,149 @@
+services:
+  de-hw-1-minio:
+    image: pgsty/silo:latest
+    container_name: de-hw-1-minio
+
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
+    volumes:
+      - minio-data:/data
+
+    command:
+      - server
+      - /data
+      - --console-address
+      - ":9001"
+
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  de-hw-1-minio-init:
+    image: pgsty/mc:latest
+    container_name: de-hw-1-minio-init
+    depends_on:
+      de-hw-1-minio:
+        condition: service_healthy
+
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        mc alias set m http://de-hw-1-minio:9000 minioadmin minioadmin
+        mc mb --ignore-existing m/warehouse
+
+  de-hw-1-pg:
+    image: postgres:17
+    container_name: de-hw-1-pg
+
+    environment:
+      POSTGRES_PASSWORD: postgres
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  de-hw-1-lakekeeper-migrate:
+    image: quay.io/lakekeeper/catalog:latest-main
+    container_name: de-hw-1-lakekeeper-migrate
+
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: "This-is-NOT-Secure!"
+      LAKEKEEPER__PG_DATABASE_URL_READ: "postgresql://postgres:postgres@de-hw-1-pg:5432/postgres"
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: "postgresql://postgres:postgres@de-hw-1-pg:5432/postgres"
+
+    command: migrate
+
+    depends_on:
+      de-hw-1-pg:
+        condition: service_healthy
+
+  de-hw-1-lakekeeper:
+    image: quay.io/lakekeeper/catalog:latest-main
+    container_name: de-hw-1-lakekeeper
+
+    environment:
+      LAKEKEEPER__PG_ENCRYPTION_KEY: "This-is-NOT-Secure!"
+      LAKEKEEPER__PG_DATABASE_URL_READ: "postgresql://postgres:postgres@de-hw-1-pg:5432/postgres"
+      LAKEKEEPER__PG_DATABASE_URL_WRITE: "postgresql://postgres:postgres@de-hw-1-pg:5432/postgres"
+
+    ports:
+      - "8181:8181"
+
+    command: serve
+
+    depends_on:
+      de-hw-1-pg:
+        condition: service_healthy
+      de-hw-1-lakekeeper-migrate:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test: ["CMD", "/home/nonroot/lakekeeper", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  de-hw-1-lakekeeper-init:
+    image: curlimages/curl:latest
+    container_name: de-hw-1-lakekeeper-init
+
+    depends_on:
+      de-hw-1-lakekeeper:
+        condition: service_healthy
+
+    volumes:
+      - ./create-warehouse.json:/create-warehouse.json:ro
+      - ./scripts/lakekeeper-init.sh:/lakekeeper-init.sh:ro
+
+    entrypoint: ["/bin/sh", "/lakekeeper-init.sh"]
+
+  de-hw-1-trino:
+    image: trinodb/trino:476
+    container_name: de-hw-1-trino
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - ./catalog:/etc/trino/catalog
+
+    depends_on:
+      de-hw-1-lakekeeper:
+        condition: service_healthy
+      de-hw-1-lakekeeper-init:
+        condition: service_completed_successfully
+      de-hw-1-minio:
+        condition: service_healthy
+      de-hw-1-minio-init:
+        condition: service_completed_successfully
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  minio-data:
+  pg-data:
