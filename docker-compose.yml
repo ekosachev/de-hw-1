@@ -144,6 +144,73 @@ services:
       retries: 5
       start_period: 10s
 
+  de-hw-1-superset-db:
+    image: postgres:17
+    container_name: de-hw-1-superset-db
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+    ports:
+      - "5433:5432"
+    volumes:
+      - superset-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  de-hw-1-superset-init:
+    build:
+      context: ./superset
+    container_name: de-hw-1-superset-init
+
+    depends_on:
+      de-hw-1-superset-db:
+        condition: service_healthy
+      de-hw-1-trino:
+        condition: service_healthy
+
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@de-hw-1-superset-db:5432/superset
+
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./superset/exports:/exports:ro
+      - ./scripts/superset-init.sh:/superset-init.sh:ro
+
+    entrypoint: ["/bin/sh", "/superset-init.sh"]
+
+  de-hw-1-superset:
+    build:
+      context: ./superset
+    container_name: de-hw-1-superset
+
+    depends_on:
+      de-hw-1-superset-init:
+        condition: service_completed_successfully
+      de-hw-1-trino:
+        condition: service_healthy
+
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@de-hw-1-superset-db:5432/superset
+    
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+
+    ports:
+      - "8088:8088"
+
+    command:
+      - /bin/sh
+      - -c
+      - |
+        /usr/bin/run-server.sh
+
 volumes:
   minio-data:
   pg-data:
+  superset-db-data:
