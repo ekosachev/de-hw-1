@@ -1,7 +1,7 @@
 TRINO_CONTAINER := de-hw-1-trino
 TRINO := docker exec -i $(TRINO_CONTAINER) trino
 
-.PHONY: up down bronze drop-bronze silver drop-silver gold drop-gold
+.PHONY: up down bronze drop-bronze silver drop-silver gold drop-gold bench-prepare bench-run-snappy bench-run-gzip bench-run-zstd bench-clean
 
 up:
 	docker compose up -d
@@ -31,3 +31,19 @@ drop-silver:
 
 drop-gold:
 	$(TRINO) < ./sql/gold/drop.sql
+
+bench-prepare:
+	$(TRINO) < ./sql/bench/init.sql
+	$(TRINO) < ./sql/bench/load_data.sql
+
+bench-run-gzip:
+	$(TRINO) < ./sql/bench/test_gzip.sql
+
+bench-run-snappy:
+	$(TRINO) < ./sql/bench/test_snappy.sql
+
+bench-run-zstd:
+	$(TRINO) < ./sql/bench/test_zstd.sql
+
+bench-clean:
+	$(TRINO) < ./sql/bench/drop.sql

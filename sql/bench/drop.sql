@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS lakekeeper.bench.customer_gzip;
+DROP TABLE IF EXISTS lakekeeper.bench.customer_snappy;
+DROP TABLE IF EXISTS lakekeeper.bench.customer_zstd;
+DROP TABLE IF EXISTS lakekeeper.bench.orders_gzip;
+DROP TABLE IF EXISTS lakekeeper.bench.orders_snappy;
+DROP TABLE IF EXISTS lakekeeper.bench.orders_zstd;
+DROP TABLE IF EXISTS lakekeeper.bench.lineitem_gzip;
+DROP TABLE IF EXISTS lakekeeper.bench.lineitem_snappy;
+DROP TABLE IF EXISTS lakekeeper.bench.lineitem_zstd;
+DROP TABLE IF EXISTS lakekeeper.bench.order_lines_gzip;
+DROP TABLE IF EXISTS lakekeeper.bench.order_lines_snappy;
+DROP TABLE IF EXISTS lakekeeper.bench.order_lines_zstd;
+DROP SCHEMA IF EXISTS lakekeeper.bench;
