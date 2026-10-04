@@ -1,49 +1,28 @@
 # Отчет по практической работе №1
 
-| Поле | Значение |
-| ---- | -------- |
-| ФИО | Косачев Егор Сергеевич |
-| Вариант / Запрос | 1 / Q3 |
-| Масштаб | sf10 |
+| Поле             | Значение               |
+| ---------------- | ---------------------- |
+| ФИО              | Косачев Егор Сергеевич |
+| Вариант / Запрос | 1 / Q3                 |
+| Масштаб          | sf10                   |
 
 Масштаб `sf10` выбран так как на моем ноутбуке достаточно оперативной памяти и свободного места на диске, чтобы не беспокоситься о том, что таблицы не влезут. Большое количество данных для аггрегации позволит получить качественные резульататы на бенчмарках и при аналитике
 
 ## Поднятые сервисы
-```mermaid
----
-title: Схема взаимодействия контейнеров
----
-flowchart LR;
 
-    subgraph Silo
-        Bronze --> Silver
-        Silver --> Gold
-    end
-
-    PostgreSQL
-    Lakekeeper
-    Trino
-    Superset
-
-    Gold --> Superset
-    Lakekeeper --> PostgreSQL
-    Lakekeeper --> Trino
-    Trino --> Silo
-```
-
-| Сервис | Роль в стеке | Почему именно он |
-| ------ | ------------ | ---------------- |
-| Silo | S3-совместимое объектное хранилище (физически содержит паркетники) | Используется вместо MinIO, так как последний больше недоступен (ушел с quay) |
-| PostgreSQL | БД для метаданных каталога | Привычная SQL база данных |
-| Lakekeeper | REST каталог метаданных таблиц | Качественное open-source решение |
-| Trino | SQL-движок, прослойка между Lakekeeper и Silo | Быстрое и простое приложение с открытыми исходниками |
-| Superset | Собирает BI-отчеты из данных Gold | Можно быстро собрать несколько графиков без кода |
+| Сервис     | Роль в стеке                                                         | Почему именно он                                                             |
+| ---------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Silo       | S3-совместимое объектное хранилище (физически содержит паркетники)   | Используется вместо MinIO, так как последний больше недоступен (ушел с quay) |
+| PostgreSQL | БД для метаданных каталога                                           | Привычная SQL база данных                                                    |
+| Lakekeeper | REST каталог метаданных таблиц                                       | Качественное open-source решение                                             |
+| Trino      | SQL-движок, позводяет обращаться к Lakeleeper как к обычной SQL-базе | Быстрое и простое приложение с открытыми исходниками                         |
+| Superset   | Собирает BI-отчеты из данных Bronze                                  | Можно быстро собрать несколько графиков без кода                             |
 
 ### Как поднимал стек
 
 Для удобства управления всеми контейнерами и быстрого запуска/остановки всей сети я создал `docker-compose` файл с оркестрацией сервисов.
 
-Чтобы обеспечивать правильную последовательность запуска и исключить случаи, когда Lakekeeper пытается подключиться к Silo, который еще загружается, каждый контейнер снабжен healthcheck и зависимостями.
+Чтобы обеспечивать правильную последовательность запуска и исключить случаи, когда Lakekeeper пытается подключиться к Silo, который еще загружается, каждый контейнер снабжен healthcheck и зависимостями. К тому же, зависимости заставляют контейнеры останавливаться в правильном порядке: сначала Superset, потом Trino, Lakekeeper и хранилища.
 
 ```mermaid
 ---
@@ -71,6 +50,16 @@ flowchart LR;
 
     Trino
 
+    subgraph Superset
+        superset-db
+        superset-init[superset-init\nПрименяет миграции к БД\nСоздает учетку админа\nЗагружает готовый дэшборд]
+        superset
+
+        superset-db -. Healthy .-> superset-init
+        superset-db -. Healthy .-> superset
+        superset-init -. Completed .-> superset
+    end
+
     Postgres -. Healthy .-> lakekeeper-migrate
     Postgres -. Healthy .-> lakekeeper
 
@@ -78,6 +67,8 @@ flowchart LR;
     lakekeeper-init -. Completed .-> Trino
     minio -. Healthy .-> Trino
     minio-init -. Completed .-> Trino
+
+    Trino -. Healthy .-> superset-init
 ```
 
 Теперь запустить весть стек можно одной командой
@@ -88,7 +79,7 @@ dokcer compose up -d
 ```pwsh
 docker compose down
 ```
-Если необходимо очистить данные в minio и pgsql:
+Если необходимо очистить данные:
 ```pwsh
 docker compose down -v
 ```
@@ -226,26 +217,10 @@ docker compose down -v
 
     volumes:
       - ./create-warehouse.json:/create-warehouse.json:ro
+      - ./scripts/lakekeeper-init.sh:/lakekeeper-init.sh:ro
 
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-
-        echo "Accepting Terms of Use..."
-        curl -f -X POST \
-          http://de-hw-1-lakekeeper:8181/management/v1/bootstrap \
-          -H "Content-Type: application/json" \
-          -d '{"accept-terms-of-use":true}'
-
-        echo "Creating warehouse..."
-        curl -f -X POST \
-          http://de-hw-1-lakekeeper:8181/management/v1/warehouse \
-          -H "Content-Type: application/json" \
-          -d @/create-warehouse.json
 ```
-Ждет `lakekeeper`, подключается, принимает условия использования и создает в нем warehouse по конфигу из `./create-warehouse.json`
+Ждет `lakekeeper`, подключается и выполняет `scripts/lakekeeper-init.sh` который создает warehouse, если он еще не существует
 
 #### trino
 ```yml
@@ -277,3 +252,164 @@ docker compose down -v
       start_period: 10s
 ```
 Ждет `lakekeeper`, `minio` и их `-init`-контейнеры, запускает сервер Trino и открывает его порт.
+
+#### superset-db
+```yml
+  de-hw-1-superset-db:
+    image: postgres:17
+    container_name: de-hw-1-superset-db
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset
+    volumes:
+      - superset-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset -d superset"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+```
+Отдельная база данных для Superset: хранит источники данных, датасеты, графики и дэшборды
+
+#### superset-init
+
+```yml
+  de-hw-1-superset-init:
+    build:
+      context: ./superset
+    container_name: de-hw-1-superset-init
+
+    depends_on:
+      de-hw-1-superset-db:
+        condition: service_healthy
+      de-hw-1-trino:
+        condition: service_healthy
+
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@de-hw-1-superset-db:5432/superset
+
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+      - ./superset/exports:/exports:ro
+      - ./scripts/superset-init.sh:/superset-init.sh:ro
+
+    entrypoint: ["/bin/sh", "/superset-init.sh"]
+```
+
+Настраивает Superset используя `superset/superset_config.py` для параметров и `scripts/superset-init.sh` чтобы создать учетку и загрузить дэшборд из `superset/exports`
+
+#### superset
+```yml
+  de-hw-1-superset:
+    build:
+      context: ./superset
+    container_name: de-hw-1-superset
+
+    depends_on:
+      de-hw-1-superset-init:
+        condition: service_completed_successfully
+      de-hw-1-trino:
+        condition: service_healthy
+
+    environment:
+      SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@de-hw-1-superset-db:5432/superset
+    
+    volumes:
+      - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
+
+    ports:
+      - "8088:8088"
+
+    command:
+      - /bin/sh
+      - -c
+      - |
+        /usr/bin/run-server.sh
+```
+Запускает сервер superset
+
+## Какие данные нужны для отчета
+
+По заданию нужно выделить 10 самых прибыльных заказов. Для этого я использую данные из tpch-таблиц `orders`, `customer` и `lineitem`
+
+| Таблица TPC-H | Нужные колонки  | Что с ними делаем                                                  |
+| ------------- | --------------- | ------------------------------------------------------------------ |
+| `orders`      | `orderkey`      | JOIN с `lineitem.orderkey`, чтобы понять, какие товары в заказе    |
+|               | `orderdate`     | Фильтр по дате заказа                                              |
+|               | `shippriority`  | Приоритет доставки для итогового отчета                            |
+| `lineitem`    | `extendedprice` | Цена без скидки для расчета прибыли                                |
+|               | `discount`      | Размер скидки                                                      |
+|               | `shipdate`      | Фильтр по дате поставки                                            |
+| `customer`    | `custkey`       | JOIN с `order.custkey`, чтобы отфильтровать по сегменту `BUILDING` |
+
+## Решения по медальонной архитектуре
+
+| Медальон | Таблица                  | Колонки                                                                          | Количество строк | Место на диcке, МБ | Формат  | Сжатие | Партиционирование |
+| -------- | ------------------------ | -------------------------------------------------------------------------------- | ---------------- | ------------------ | ------- | ------ | ----------------- |
+| Bronze   | `customer`               | Как в TPC-H                                                                      | 1500000          | 77.9               | PARQUET | ZSTD   | Нет               |
+|          | `lineitem`               | Как в TPC-H                                                                      | 59986052         | 1457.1             | PARQUET | ZSTD   | YEAR(orderdate)   |
+|          | `orders`                 | Как в TPC-H                                                                      | 15000000         | 369.4              | PARQUET | ZSTD   | Нет               |
+| Silver   | `order_lines`            | `orderkey`, `orderdate`, `shippriority`, `extendedprice`, `discount`, `shipdate` | 307299           | 2.6                | PARQUET | ZSTD   | Нет               |
+| Gold     | `most_profitable_orders` | `orderkey`, `orderdate`, `shippriority`, `shipdate`, `revenue`                   | 10               | 0.001              | PARQUET | ZSTD   | Нет               |
+
+В Bronze-слой попадают "сырые" данны из источников (в данном случае – TPC-H). Задача этого слоя – сохранить данные по-максимуму, поэтому колонки не отбрасываются. Партиционирование применено только к `lineitem` по году доставки, так как именно по этому полю данные будут фильтроваться в дальнейшем. Можно было бы партиционировать по `customer.mktsegment`, но там всего несколько разных значений, поэтому объемы для чтения не особенно снизятся.
+
+В Silver-слой попадают только те данные, которые нам "интересны" – информация по доставке и стоимости товаров, которые нужно доставить после 1995-03-15 с нужным `customer.mktsegment`. Партиционирование на этом слое также не применятся из-за малого количества строк.
+
+Запрос для Silver-слоя:
+```sql
+SET SESSION lakekeeper.compression_codec = 'ZSTD';
+CREATE TABLE IF NOT EXISTS lakekeeper.silver.order_lines
+WITH (
+    format = 'PARQUET'
+)
+AS
+SELECT
+    o.orderkey,
+    o.orderdate,
+    o.shippriority,
+    l.extendedprice,
+    l.discount,
+    l.shipdate
+FROM lakekeeper.bronze.customer AS c
+JOIN lakekeeper.bronze.orders AS o
+    ON c.custkey = o.custkey
+JOIN lakekeeper.bronze.lineitem AS l
+    ON o.orderkey = l.orderkey
+WHERE c.mktsegment = 'BUILDING'
+    AND l.shipdate > DATE '1995-03-15'
+    AND o.orderdate <= DATE '1995-03-15';
+```
+
+В Gold-слой попадает то что мы изначально хотели – 10 самых прибыльных заказов по убыванию `revenue`.
+Запрос для Gold-слоя:
+```sql
+SET SESSION lakekeeper.compression_codec = 'ZSTD';
+CREATE TABLE IF NOT EXISTS lakekeeper.gold.most_profitable_orders
+WITH (
+    format = 'PARQUET'
+)
+AS
+SELECT
+    ol.orderkey,
+    ol.orderdate,
+    ol.shippriority,
+    ol.shipdate,
+    SUM(ol.extendedprice * (1 - ol.discount)) as revenue
+FROM lakekeeper.silver.order_lines AS ol
+GROUP BY ol.orderkey, ol.orderdate, ol.shipdate, ol.shippriority
+ORDER BY revenue DESC
+LIMIT 10;
+```
+
+На всех слоях применяется кодек сжатия ZStandard, так как он сжимает данные лучше, чем Snappy и менее требователен к CPU чем GZIP.
+
+## Тесты производительности
+
+Для тестирования производительности кластера использовался запрос Silver-слоя, так как он достаточно сильно нагружает хост, испольуя JOIN больших таблиц и фильтры.
+
+
