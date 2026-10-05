@@ -48,6 +48,55 @@ flowchart LR;
 | Trino      | Выполняет SQL-запросы на Iceberg-таблицах, используя Lakekeeper как каталог метаданных | Быстрое и простое приложение с открытыми исходниками                         |
 | Superset   | Собирает BI-отчеты из данных Bronze                                                    | Можно быстро собрать несколько графиков без кода                             |
 
+## Структура репозитория
+
+```mermaid
+treeView-beta
+├── catalog
+│   ├── lakekeeper.properties ## настройки каталога Lakekeeper
+│   └── tpch.properties ## настройки TPC-H для генерации данных
+├── imgs ## картинки для отчета
+├── scripts ## shell-скрипты для настройки lakekeeper и superset
+│   ├── lakekeeper-init.sh ## принимает ToU и создает каталоги
+│   └── superset-init.sh ## применяет миграции, создает админа и импортирует дэшборд
+├── sql ## SQL-скрипты для Trino, используются в Makefile
+│   ├── bench ## SQL-скрипты для бенчмарков сжатия
+│   │   ├── drop.sql ## удаление созданных таблиц
+│   │   ├── init.sql ## создание схемы bench
+│   │   ├── load_data.sql ## создания таблиц с разными кодеками
+│   │   ├── test_gzip.sql ## выполнение запроса на GZIP-таблицах
+│   │   ├── test_snappy.sql ## выполнение запроса на Snappy-таблицах
+│   │   └── test_zstd.sql ## выполнение запроса на ZSTD-таблицах
+│   ├── bronze ## SQL-скрипты для бронзового слоя
+│   │   ├── customer.sql ## загрузка customer из TPC-H
+│   │   ├── drop.sql ## удаление таблиц бронзового слоя и схемы bronze
+│   │   ├── init.sql ## создание схемы bronze
+│   │   ├── lineitem.sql ## загрузка lineitem из TPC-H
+│   │   └── orders.sql ## загрузка orders из TPC-H
+│   ├── gold ## SQL-скрипты для золотого слоя
+│   │   ├── drop.sql ## удаление most_profitable_orders и схемы gold
+│   │   ├── finalize.sql ## создание итоговой таблицы most_profitable_orders из данных silver
+│   │   └── init.sql ## создание схемы gold
+│   ├── silver ## SQL-скрипты для серебряного слоя
+│   │   ├── aggregate.sql ## создание таблицы order_lines на основе данных bronze
+│   │   ├── drop.sql ## удаление order_lines и схемы silver
+│   │   ├── head.sql ## вывод первых 5 строк order_lines
+│   │   ├── init.sql ## создание схемы silver
+│   │   └── mutate.sql ## добавление и заполнение колонки order_year
+│   └── snapshots ## SQL-скрипты для работы со снапшотами
+│       ├── destruct.sql ## выполняет разрушительное действие на silver.order_lines
+│       └── list.sql ## выводит список снапшотов silver.order_lines
+├── superset ## файлы Superset
+│   ├── exports ## экспортированные сущности
+│   │   └── bronze-dashborad.zip ## готовый дэшборд с графиками, датасетами и подключением к Trino
+│   ├── Dockerfile ## Dockerfile для Superset
+│   └── superset_config.py ## настройки Superset
+├── Makefile ## позволяет быстро запускать SQL-скрипты на Trino
+├── create-warehouse.json ## настройки Warehouse
+├── docker-compose.yml ## файл с описанием оркестрации сервисов
+└── readme.md ## этот файл с отчетом
+```
+
 ### Как поднимал стек
 
 Для удобства управления всеми контейнерами и быстрого запуска/остановки всей сети я создал `docker-compose` файл с оркестрацией сервисов.
