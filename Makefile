@@ -1,7 +1,7 @@
 TRINO_CONTAINER := de-hw-1-trino
 TRINO := docker exec -i $(TRINO_CONTAINER) trino
 
-.PHONY: up down bronze drop-bronze silver drop-silver gold drop-gold bench-prepare bench-run-snappy bench-run-gzip bench-run-zstd bench-clean
+.PHONY: up down bronze drop-bronze silver drop-silver gold drop-gold bench-prepare bench-run-snappy bench-run-gzip bench-run-zstd bench-clean mutate snapshot-list snapshot-destruct
 
 up:
 	docker compose up -d
@@ -47,3 +47,18 @@ bench-run-zstd:
 
 bench-clean:
 	$(TRINO) < ./sql/bench/drop.sql
+
+mutate:
+	@echo Pre-mutatuion state:
+	$(TRINO) < ./sql/silver/head.sql
+	@echo Applying mutation...
+	$(TRINO) < ./sql/silver/mutate.sql
+	@echo Mutation applied.
+	@echo Post-mutation state:
+	$(TRINO) < ./sql/silver/head.sql
+
+snapshot-list:
+	$(TRINO) < ./sql/snapshots/list.sql
+
+snapshot-destruct:
+	$(TRINO) < ./sql/snapshots/destruct.sql
