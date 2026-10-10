@@ -633,3 +633,98 @@ CALL lakekeeper.system.rollback_to_snapshot(
 ## Выводы
 
 Работа с такой системой как Lakehouse состоит из множества разных частей, каждая из которых по-своему сложна. Особенно много времени я потратил на то, чтобы из отдельных `docker run`-команд гайда собрать полноценный `docker-compose.yml`, но эти старания полностью окупились: система поднимается всего одной командой, а настройки сохранены в файлах. Также пришлось подумать над организацией медальонной архитектуры: с Bronze и Gold было все более-менее ясно, но не совсем понятно, что стоило класть в Silver, а что – оставить в "бронзе". После работы с медальенами я провел тесты алгоритмов сжатия и сравнил их по качеству и скорости работы, наиболее выгодным кодеком оказался `ZSTD`, так как он быстро и эффективно сжимает данные. В конце я поработал с schema evolution и снапшотами, собрал небольшой дэшборд на Superset.
+
+## Дополительно – подключение Apache Airflow
+После выполнения работы я решил добавить в систему Apache Airflow и попробовать запустить с помощью него пайплайн создания silver и gold слоев.
+
+В `docker-compose.yml` добавил:
+```yml
+  de-hw-1-airflow:
+    image: apache/airflow:3.3.2-python3.14
+    container_name: de-hw-1-airflow
+    depends_on:
+      de-hw-1-trino:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__TEST_CONNECTION: "Enabled"
+
+      _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-trino
+
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql:ro
+    command: standalone
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8080/health'')" || exit 1',
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
+```
+
+После чего запустил контейнеры и вошел в аккаунт в админке Airflow. (логин – `admin`, пароль надо смотреть в логах `de-hw-1-airflow`). В админке создал подключение к trino:
+
+![Trino Connection](./imgs/trino-connector.png)
+
+В Extra Fields JSON нужно указать:
+```json
+{
+  "protocol": "http",
+  "http_schema": "http"
+}
+```
+Чтобы Airflow подключился по `http`.
+
+После проверки создал файл `airflow/dags/lakehouse-pipeline.py`, в котором описал необходимые операции. Так как sql-скрипты из `./sql` уже проброшены внутрь Airflow, можно запускать их по имени файла:
+
+```py
+with DAG(
+    dag_id="lakehouse_pipeline",
+    description="Bronze -> Silver -> Gold. Assumes that bronze is alreay created",
+    start_date=datetime(2026, 1, 1),
+    schedule=None,
+    catchup=False,
+    default_args={
+        "owner": "data-engeneering",
+        "retries": 1,
+        "retry_delay": timedelta(minutes=2),
+    },
+    template_searchpath=["/opt/airflow/sql"],
+    tags=["lakehouse", "trino"],
+) as dag:
+    create_silver = SQLExecuteQueryOperator(
+        task_id="create_silver", conn_id="trino", sql="silver/init.sql"
+    )
+    build_silver = SQLExecuteQueryOperator(
+        task_id="build_silver", conn_id="trino", sql="silver/aggregate.sql"
+    )
+
+    create_gold = SQLExecuteQueryOperator(
+        task_id="create_gold", conn_id="trino", sql="gold/init.sql"
+    )
+    build_gold = SQLExecuteQueryOperator(
+        task_id="build_gold", conn_id="trino", sql="gold/finalize.sql"
+    )
+
+    create_silver >> build_silver >> create_gold >> build_gold
+```
+
+После обновления страницы Airflow в браузере, новый DAG появился в списке и я запустил его вручную:
+
+![DAG Run](./imgs/dag-run.png)
+
+Весь пайплайн завершился без ошибок и таблицы появились в trino.
+
+**Важно** – чтобы пайплайн запустился корректно, в Trino должны быть только таблицы бронзового слоя (пайплайн предполагает, что эти таблицы существуют, а если будут и другие слои – запуск ничего не изменит). Чтобы удалить слои можно запустить `make drop-gold` и `make drop-silver`.
