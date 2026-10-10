@@ -197,7 +197,7 @@ services:
     environment:
       SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
       SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@de-hw-1-superset-db:5432/superset
-    
+
     volumes:
       - ./superset/superset_config.py:/app/pythonpath/superset_config.py:ro
 
@@ -209,6 +209,40 @@ services:
       - -c
       - |
         /usr/bin/run-server.sh
+
+  de-hw-1-airflow:
+    image: apache/airflow:3.3.2-python3.14
+    container_name: de-hw-1-airflow
+    depends_on:
+      de-hw-1-trino:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__TEST_CONNECTION: "Enabled"
+
+      _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-trino
+
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-admin}
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./sql:/opt/airflow/sql:ro
+    command: standalone
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request; urllib.request.urlopen(''http://localhost:8080/health'')" || exit 1',
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    restart: unless-stopped
 
 volumes:
   minio-data:
